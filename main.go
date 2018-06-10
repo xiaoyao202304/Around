@@ -34,7 +34,7 @@ const (
 	//PROJECT_ID = "around-xxx"
 	//BT_INSTANCE = "around-post"
 	// Needs to update this URL if you deploy it to cloud.
-	ES_URL      = "http://35.237.224.246:9200"
+	ES_URL      = "http://35.229.117.5:9200"
 	BUCKET_NAME = "post-images-8206503"
 )
 
