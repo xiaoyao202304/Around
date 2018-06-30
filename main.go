@@ -1,7 +1,7 @@
 package main
 
 import (
-	"cloud.google.com/go/bigtable"
+	// "cloud.google.com/go/bigtable"
 	"cloud.google.com/go/storage"
 	"context"
 	"encoding/json"
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"path/filepath"
 )
 
 var mySigningKey = []byte("secret")
@@ -30,6 +31,8 @@ type Post struct {
 	Message  string   `json:"message"`
 	Location Location `json:"location"`
 	Url      string   `json:"url"`
+	Type     string   `json:"type"`
+	Face     float64  `json:"face"`  
 }
 
 const (
@@ -40,11 +43,27 @@ const (
 	//PROJECT_ID = "around-xxx"
 	//BT_INSTANCE = "around-post"
 	// Needs to update this URL if you deploy it to cloud.
-	ES_URL      = "http://35.190.176.151:9200"
+	ES_URL      = "http://104.198.51.243:9200"
 	BUCKET_NAME = "post-images-8206503"
 	PROJECT_ID  = "perfect-spanner-206503"
 	BT_INSTANCE = "around-post"
+	API_PREFIX      = "/api/v1"
 )
+
+var (
+	mediaTypes = map[string]string{
+	   ".jpeg": "image",
+	   ".jpg":  "image",
+	   ".gif":  "image",
+	   ".png":  "image",
+	   ".mov":  "video",
+	   ".mp4":  "video",
+	   ".avi":  "video",
+	   ".flv":  "video",
+	   ".wmv":  "video",
+	}
+  )
+  
 
 func main() {
 	// Create a client
@@ -89,12 +108,18 @@ func main() {
 		},
 		SigningMethod: jwt.SigningMethodHS256,
 	})
-	r.Handle("/post", jwtMiddleware.Handler(http.HandlerFunc(handlerPost))).Methods("POST")
-	r.Handle("/search", jwtMiddleware.Handler(http.HandlerFunc(handlerSearch))).Methods("GET")
-	r.Handle("/login", http.HandlerFunc(loginHandler)).Methods("POST")
-	r.Handle("/signup", http.HandlerFunc(signupHandler)).Methods("POST")
+	r.Handle(API_PREFIX+"/post", jwtMiddleware.Handler(http.HandlerFunc(handlerPost)))
+	r.Handle(API_PREFIX+"/search", jwtMiddleware.Handler(http.HandlerFunc(handlerSearch)))
+	r.Handle(API_PREFIX+"/cluster", jwtMiddleware.Handler(http.HandlerFunc(handlerCluster)))
 
-	http.Handle("/", r)
+	r.Handle(API_PREFIX+"/login", http.HandlerFunc(loginHandler))
+	r.Handle(API_PREFIX+"/signup", http.HandlerFunc(signupHandler))
+
+	// Backend endpoints.
+	http.Handle(API_PREFIX+"/", r)
+	// Frontend endpoints.
+	http.Handle("/", http.FileServer(http.Dir("build")))
+
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
@@ -145,6 +170,27 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	im, header, _ := r.FormFile("image")
+	defer im.Close()
+	suffix := filepath.Ext(header.Filename)
+
+	// Client needs to know the media type so as to render it.
+	if t, ok := mediaTypes[suffix]; ok {
+	p.Type = t
+	} else {
+	p.Type = "unknown"
+	}
+	// ML Engine only supports jpeg.
+	if suffix == ".jpeg" {
+	if score, err := annotate(im); err != nil {
+		http.Error(w, "Failed to annotate the image", http.StatusInternalServerError)
+		fmt.Printf("Failed to annotate the image %v\n", err)
+		return
+	} else {
+		p.Face = score
+	}
+	}
+
 	// Update the media link after saving to GCS.
 	p.Url = attrs.MediaLink
 
@@ -152,36 +198,36 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 	saveToES(p, id)
 
 	// Save to BigTable.
-	saveToBigTable(p, id)
+	// saveToBigTable(p, id)
 
 }
 
-func saveToBigTable(p *Post, id string) {
-	ctx := context.Background()
-	// you must update project name here
-	bt_client, err := bigtable.NewClient(ctx, PROJECT_ID, BT_INSTANCE)
-	if err != nil {
-		panic(err)
-		return
-	}
+// func saveToBigTable(p *Post, id string) {
+// 	ctx := context.Background()
+// 	// you must update project name here
+// 	bt_client, err := bigtable.NewClient(ctx, PROJECT_ID, BT_INSTANCE)
+// 	if err != nil {
+// 		panic(err)
+// 		return
+// 	}
 
-	tbl := bt_client.Open("post")
-	mut := bigtable.NewMutation()
-	t := bigtable.Now()
+// 	tbl := bt_client.Open("post")
+// 	mut := bigtable.NewMutation()
+// 	t := bigtable.Now()
 
-	mut.Set("post", "user", t, []byte(p.User))
-	mut.Set("post", "message", t, []byte(p.Message))
-	mut.Set("location", "lat", t, []byte(strconv.FormatFloat(p.Location.Lat, 'f', -1, 64)))
-	mut.Set("location", "lon", t, []byte(strconv.FormatFloat(p.Location.Lon, 'f', -1, 64)))
+// 	mut.Set("post", "user", t, []byte(p.User))
+// 	mut.Set("post", "message", t, []byte(p.Message))
+// 	mut.Set("location", "lat", t, []byte(strconv.FormatFloat(p.Location.Lat, 'f', -1, 64)))
+// 	mut.Set("location", "lon", t, []byte(strconv.FormatFloat(p.Location.Lon, 'f', -1, 64)))
 
-	err = tbl.Apply(ctx, id, mut)
-	if err != nil {
-		panic(err)
-		return
-	}
-	fmt.Printf("Post is saved to BigTable: %s\n", p.Message)
+// 	err = tbl.Apply(ctx, id, mut)
+// 	if err != nil {
+// 		panic(err)
+// 		return
+// 	}
+// 	fmt.Printf("Post is saved to BigTable: %s\n", p.Message)
+// }
 
-}
 func saveToGCS(ctx context.Context, r io.Reader, bucketName, name string) (*storage.ObjectHandle, *storage.ObjectAttrs, error) {
 	// Create a client
 	client, err := storage.NewClient(ctx)
@@ -303,5 +349,68 @@ func handlerSearch(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write(js)
+}
+
+func handlerCluster(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("Received one request for clustering")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
+
+	if r.Method != "GET" {
+		return
+	}
+
+	term := r.URL.Query().Get("term")
+
+	// Create a client
+	client, err := elastic.NewClient(elastic.SetURL(ES_URL), elastic.SetSniff(false))
+	if err != nil {
+		http.Error(w, "ES is not setup", http.StatusInternalServerError)
+		fmt.Printf("ES is not setup %v\n", err)
+		return
+	}
+
+	// Range query.
+	// For details, https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
+	q := elastic.NewRangeQuery(term).Gte(0.9)
+
+	searchResult, err := client.Search().
+		Index(INDEX).
+		Query(q).
+		Pretty(true).
+		Do()
+	if err != nil {
+		// Handle error
+		m := fmt.Sprintf("Failed to query ES %v", err)
+		fmt.Println(m)
+		http.Error(w, m, http.StatusInternalServerError)
+	}
+
+	// searchResult is of type SearchResult and returns hits, suggestions,
+	// and all kinds of other information from Elasticsearch.
+	fmt.Printf("Query took %d milliseconds\n", searchResult.TookInMillis)
+	// TotalHits is another convenience function that works even when something goes wrong.
+	fmt.Printf("Found a total of %d post\n", searchResult.TotalHits())
+
+	// Each is a convenience function that iterates over hits in a search result.
+	// It makes sure you don't need to check for nil values in the response.
+	// However, it ignores errors in serialization.
+	var typ Post
+	var ps []Post
+	for _, item := range searchResult.Each(reflect.TypeOf(typ)) {
+		p := item.(Post)
+		ps = append(ps, p)
+
+	}
+	js, err := json.Marshal(ps)
+	if err != nil {
+		m := fmt.Sprintf("Failed to parse post object %v", err)
+		fmt.Println(m)
+		http.Error(w, m, http.StatusInternalServerError)
+		return
+	}
+
 	w.Write(js)
 }
