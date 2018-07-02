@@ -14,9 +14,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strconv"
-	"path/filepath"
 )
 
 var mySigningKey = []byte("secret")
@@ -32,7 +32,7 @@ type Post struct {
 	Location Location `json:"location"`
 	Url      string   `json:"url"`
 	Type     string   `json:"type"`
-	Face     float64  `json:"face"`  
+	Face     float64  `json:"face"`
 }
 
 const (
@@ -43,27 +43,26 @@ const (
 	//PROJECT_ID = "around-xxx"
 	//BT_INSTANCE = "around-post"
 	// Needs to update this URL if you deploy it to cloud.
-	ES_URL      = "http://104.198.51.243:9200"
+	ES_URL      = "http://35.237.200.39:9200"
 	BUCKET_NAME = "post-images-8206503"
 	PROJECT_ID  = "perfect-spanner-206503"
 	BT_INSTANCE = "around-post"
-	API_PREFIX      = "/api/v1"
+	API_PREFIX  = "/api/v1"
 )
 
 var (
 	mediaTypes = map[string]string{
-	   ".jpeg": "image",
-	   ".jpg":  "image",
-	   ".gif":  "image",
-	   ".png":  "image",
-	   ".mov":  "video",
-	   ".mp4":  "video",
-	   ".avi":  "video",
-	   ".flv":  "video",
-	   ".wmv":  "video",
+		".jpeg": "image",
+		".jpg":  "image",
+		".gif":  "image",
+		".png":  "image",
+		".mov":  "video",
+		".mp4":  "video",
+		".avi":  "video",
+		".flv":  "video",
+		".wmv":  "video",
 	}
-  )
-  
+)
 
 func main() {
 	// Create a client
@@ -176,19 +175,19 @@ func handlerPost(w http.ResponseWriter, r *http.Request) {
 
 	// Client needs to know the media type so as to render it.
 	if t, ok := mediaTypes[suffix]; ok {
-	p.Type = t
+		p.Type = t
 	} else {
-	p.Type = "unknown"
+		p.Type = "unknown"
 	}
 	// ML Engine only supports jpeg.
 	if suffix == ".jpeg" {
-	if score, err := annotate(im); err != nil {
-		http.Error(w, "Failed to annotate the image", http.StatusInternalServerError)
-		fmt.Printf("Failed to annotate the image %v\n", err)
-		return
-	} else {
-		p.Face = score
-	}
+		if score, err := annotate(im); err != nil {
+			http.Error(w, "Failed to annotate the image", http.StatusInternalServerError)
+			fmt.Printf("Failed to annotate the image %v\n", err)
+			return
+		} else {
+			p.Face = score
+		}
 	}
 
 	// Update the media link after saving to GCS.
